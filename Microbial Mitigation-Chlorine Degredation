@@ -1,0 +1,185 @@
+# Load necessary library
+library(dplyr)
+library(ggplot2)
+
+# 1.
+
+data <- read.csv("C:/Users/User/Downloads/NSDATA.csv", quote="")
+
+# Convert Free.Chlorine and Temp..F. to numeric
+data$Free.Chlorine <- as.numeric(data$Free.Chlorine)
+data$Temp..F. <- as.numeric(data$Temp..F.)
+
+# Convert Date to Date format and extract month
+data$Date <- as.Date(data$Date, format = "%m/%d/%Y")
+data$Month <- format(data$Date, "%m")  # "01" for Jan, etc.
+
+
+# 2. 
+
+data_clean <- data %>%
+  mutate(
+    SiteType = case_when(
+      grepl("UM|UB", ID, ignore.case = TRUE) ~ "Main",
+      grepl("US", ID, ignore.case = TRUE) ~ "Shower",
+      grepl("WH", ID, ignore.case = TRUE) ~ "Water Heater",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(SiteType))  # keep only valid sites
+
+# 3. 
+
+monthly_means <- tapply(data$Free.Chlorine, data$Month, mean, na.rm = TRUE)
+monthly_temp_means <- data %>%
+  group_by(Month) %>%
+  summarise(Mean_Temp_F = mean(Temp..F., na.rm = TRUE))
+
+# 4. 
+
+site_month_summary <- data_clean %>%
+  group_by(ID, Month, SiteType) %>%
+  summarise(
+    Mean_Free_Chlorine = mean(Free.Chlorine, na.rm = TRUE),
+    Mean_Temp_F = mean(Temp..F., na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+# 5. Plot Free Chlorine vs Temperature by SiteType
+
+# Main Sites
+ggplot(filter(site_month_summary, SiteType == "Main"), 
+       aes(x = Mean_Temp_F, y = Mean_Free_Chlorine)) +
+  geom_point(size = 3, color = "blue") +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "Free Chlorine vs Temperature - Main Sites",
+       x = "Mean Temperature (°F)",
+       y = "Mean Free Chlorine (mg/L)") +
+  theme_minimal()
+
+# Showers
+ggplot(filter(site_month_summary, SiteType == "Shower"), 
+       aes(x = Mean_Temp_F, y = Mean_Free_Chlorine)) +
+  geom_point(size = 3, color = "green") +
+  geom_smooth(method = "lm", se = TRUE, color = "green") +
+  labs(title = "Free Chlorine vs Temperature - Showers",
+       x = "Mean Temperature (°F)",
+       y = "Mean Free Chlorine (mg/L)") +
+  theme_minimal()
+
+# Water Heaters
+ggplot(filter(site_month_summary, SiteType == "Water Heater"), 
+       aes(x = Mean_Temp_F, y = Mean_Free_Chlorine)) +
+  geom_point(size = 3, color = "red") +
+  geom_smooth(method = "lm", se = TRUE, color = "red") +
+  labs(title = "Free Chlorine vs Temperature - Water Heaters",
+       x = "Mean Temperature (°F)",
+       y = "Mean Free Chlorine (mg/L)") +
+  theme_minimal()
+
+
+# 6. Calculate regression equations for each SiteType
+
+line_equations <- data_clean %>%
+  group_by(SiteType) %>%
+  summarise(
+    model = list(lm(Free.Chlorine ~ Temp..F., data = cur_data())),
+    .groups = "drop"
+  ) %>%
+  rowwise() %>%
+  mutate(
+    intercept = coef(model)[1],
+    slope = coef(model)[2],
+    equation = paste0("y = ", round(slope, 4), " * x + ", round(intercept, 4))
+  ) %>%
+  select(SiteType, equation)
+
+# View the equations
+line_equations
+
+
+data_no_july <- data_clean %>%
+  filter(Month != "07")
+
+# Boxplot by SiteType, faceted by Month
+ggplot(data_no_july, aes(x = SiteType, y = Free.Chlorine, fill = SiteType)) +
+  geom_boxplot() +
+  facet_wrap(~ Month, scales = "free_y") +
+  labs(
+    title = "Distribution of Free Chlorine by Site Type Across Months",
+    x = NULL, 
+    y = "Free Chlorine (mg/L)",
+    fill = "Site Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank()  # hide x-axis tick labels
+  )
+  
+
+data_no_july <- data_clean %>%
+  filter(Month != "07")
+
+# Boxplot of Temperature by SiteType, faceted by Month
+ggplot(data_no_july, aes(x = SiteType, y = Temp..F., fill = SiteType)) +
+  geom_boxplot() +
+  facet_wrap(~ Month, scales = "free_y") +
+  labs(
+    title = "Distribution of Temperature by Site Type Across Months (Excluding July)",
+    x = NULL,  # remove x-axis label
+    y = "Temperature (°F)",
+    fill = "Site Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank()  # hide x-axis tick labels
+  )
+
+
+
+# List of site types
+site_types <- c("Main", "Shower", "Water Heater")
+
+# Run ANOVA per site type (Free Chlorine ~ Month)
+anova_results <- lapply(site_types, function(site) {
+  df <- filter(data_no_july, SiteType == site)
+  model <- aov(Free.Chlorine ~ Month, data = df)
+  list(
+    SiteType = site,
+    ANOVA_Summary = summary(model),
+    TukeyHSD = TukeyHSD(model)  # optional: pairwise month comparisons
+  )
+})
+
+names(anova_results) <- site_types
+
+# View results
+anova_results
+
+
+# List of site types
+site_types <- c("Main", "Shower", "Water Heater")
+
+# Calculate correlation and linear model per site type
+chlorine_temp_results <- lapply(site_types, function(site) {
+  df <- filter(data_no_july, SiteType == site)
+  
+  # Correlation
+  corr <- cor(df$Temp..F., df$Free.Chlorine, use = "complete.obs")
+  
+  # Linear regression
+  model <- lm(Free.Chlorine ~ Temp..F., data = df)
+  
+  list(
+    SiteType = site,
+    Correlation = corr,
+    Model = model,
+    Equation = paste0(
+      "y = ", round(coef(model)[2], 4), " * x + ", round(coef(model)[1], 4)
+    )
+  )
+})
+
+names(chlorine_temp_results) <- site_types
+chlorine_temp_results
